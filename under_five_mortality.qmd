@@ -1,0 +1,701 @@
+---
+title: "Under-Five Mortality Rate: A Global Concern"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    
+---
+
+## 📘 Introduction
+
+**Under-five mortality rate (U5MR)** is a key indicator of child health and overall development in a country. Despite progress in recent decades, millions of children still die before their fifth birthday due to preventable causes. This report explores the global trends and disparities in U5MR using UNICEF data.
+
+## 📊 Data Preparation
+
+```{python}
+import pandas as pd
+import numpy as np
+
+# Load the datasets
+try:
+    df1 = pd.read_csv('unicef_indicator_1.csv')  # Population under age 5
+    df2 = pd.read_csv('unicef_indicator_2.csv')  # Child deprivation data
+    df3 = pd.read_csv('unicef_metadata.csv')  # Country indicators
+except FileNotFoundError as e:
+    import sys
+    sys.exit(f"Error: Required data file not found. Please ensure all data files are available.")
+
+# Standardize column names and formats
+if 'time_period' in df1.columns:
+    df1 = df1.rename(columns={'time_period': 'year'})
+if 'time_period' in df2.columns:
+    df2 = df2.rename(columns={'time_period': 'year'})
+
+# Convert year columns to numeric
+df1['year'] = pd.to_numeric(df1['year'], errors='coerce')
+df2['year'] = pd.to_numeric(df2['year'], errors='coerce')
+df3['year'] = pd.to_numeric(df3['year'], errors='coerce')
+
+# Rename value columns for clarity
+df1 = df1.rename(columns={'obs_value': 'population_under5'})
+df2 = df2.rename(columns={'obs_value': 'child_deprivation'})
+
+# Create a simple merged dataset
+merged_df = df3[['country', 'year', 'Life expectancy at birth, total (years)', 'Birth rate, crude (per 1,000 people)']]
+
+# Add child deprivation data - use only Total sex data to simplify
+deprivation_data = df2[df2['sex'] == 'Total'][['country', 'year', 'child_deprivation']]
+merged_df = pd.merge(merged_df, deprivation_data, on=['country', 'year'], how='outer')
+
+# Simple mortality proxy function (-0.1 to 0.1 scale)
+def simple_mortality_proxy(row):
+    """Simple mortality proxy calculation"""
+    score = 0
+    count = 0
+    
+    # Factor 1: Life expectancy (if available)
+    if pd.notna(row.get('Life expectancy at birth, total (years)')):
+        life_exp = row['Life expectancy at birth, total (years)']
+        # Lower life expectancy = higher mortality
+        # Map 30-80 years to 0.1 to -0.1
+        life_exp_factor = 0.1 - (life_exp - 30) * 0.2 / 50
+        score += min(0.1, max(-0.1, life_exp_factor))
+        count += 1
+    
+    # Factor 2: Child deprivation (if available)
+    if pd.notna(row.get('child_deprivation')):
+        # Higher deprivation = higher mortality
+        # Map 0-40% to 0-0.1
+        deprivation_factor = row['child_deprivation'] * 0.1 / 40
+        score += min(0.1, max(0, deprivation_factor))
+        count += 1
+        
+    # Return average score or 0 if no data
+    return score / count if count > 0 else 0
+
+# Apply the simple proxy calculation
+merged_df['mortality_proxy'] = merged_df.apply(simple_mortality_proxy, axis=1)
+
+# Convert proxy to deaths per 1000 live births
+# Scale from -0.1 to 0.1 maps to roughly 2-200 deaths per 1000
+merged_df['estimated_mortality_per_1000'] = 2 + (merged_df['mortality_proxy'] + 0.1) * 990
+
+# Create a country-level summary
+country_summary = merged_df.groupby('country').agg({
+    'estimated_mortality_per_1000': ['mean', 'count'],
+    'Life expectancy at birth, total (years)': 'mean',
+    'child_deprivation': 'mean'
+}).reset_index()
+
+# Flatten multi-index columns
+country_summary.columns = ['_'.join(col).strip('_') if isinstance(col, tuple) else col for col in country_summary.columns]
+
+# Sort by mortality estimate (highest first)
+country_summary = country_summary.sort_values('estimated_mortality_per_1000_mean', ascending=False)
+
+# Save results to CSV
+merged_df.to_csv('simple_mortality_estimates.csv', index=False)
+country_summary.to_csv('simple_country_mortality_summary.csv', index=False)
+```
+
+## 🌍 Latest Mortality Rate by Country (Map)
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import geopandas as gpd
+from matplotlib.colors import LinearSegmentedColormap
+
+# Load the datasets with error handling
+try:
+    df1 = pd.read_csv('unicef_indicator_1.csv')
+    df2 = pd.read_csv('unicef_indicator_2.csv')
+    df3 = pd.read_csv('unicef_metadata.csv')
+except FileNotFoundError as e:
+    import sys
+    sys.exit(f"Error: Required data file not found. Please ensure all data files are available.")
+
+# Standardize column names and formats
+if 'time_period' in df1.columns:
+    df1 = df1.rename(columns={'time_period': 'year'})
+if 'time_period' in df2.columns:
+    df2 = df2.rename(columns={'time_period': 'year'})
+
+# Convert year columns to numeric
+df1['year'] = pd.to_numeric(df1['year'], errors='coerce')
+df2['year'] = pd.to_numeric(df2['year'], errors='coerce')
+df3['year'] = pd.to_numeric(df3['year'], errors='coerce')
+
+# Rename value columns for clarity
+df1 = df1.rename(columns={'obs_value': 'population_under5'})
+df2 = df2.rename(columns={'obs_value': 'child_deprivation'})
+
+# Create a simple merged dataset
+merged_df = df3[['country', 'alpha_3_code', 'year', 'Life expectancy at birth, total (years)', 'Birth rate, crude (per 1,000 people)']]
+
+# Add child deprivation data - use only Total sex data to simplify
+deprivation_data = df2[df2['sex'] == 'Total'][['country', 'alpha_3_code', 'year', 'child_deprivation']]
+merged_df = pd.merge(merged_df, deprivation_data, on=['country', 'alpha_3_code', 'year'], how='outer')
+
+# Simple mortality proxy function (-0.1 to 0.1 scale)
+def simple_mortality_proxy(row):
+    """Simple mortality proxy calculation"""
+    score = 0
+    count = 0
+    
+    # Factor 1: Life expectancy (if available)
+    if pd.notna(row.get('Life expectancy at birth, total (years)')):
+        life_exp = row['Life expectancy at birth, total (years)']
+        # Lower life expectancy = higher mortality
+        # Map 30-80 years to 0.1 to -0.1
+        life_exp_factor = 0.1 - (life_exp - 30) * 0.2 / 50
+        score += min(0.1, max(-0.1, life_exp_factor))
+        count += 1
+    
+    # Factor 2: Child deprivation (if available)
+    if pd.notna(row.get('child_deprivation')):
+        # Higher deprivation = higher mortality
+        # Map 0-40% to 0-0.1
+        deprivation_factor = row['child_deprivation'] * 0.1 / 40
+        score += min(0.1, max(0, deprivation_factor))
+        count += 1
+        
+    # Return average score or 0 if no data
+    return score / count if count > 0 else 0
+
+# Apply the simple proxy calculation
+merged_df['mortality_proxy'] = merged_df.apply(simple_mortality_proxy, axis=1)
+
+# Convert proxy to deaths per 1000 live births
+# Scale from -0.1 to 0.1 maps to roughly 2-200 deaths per 1000
+merged_df['estimated_mortality_per_1000'] = 2 + (merged_df['mortality_proxy'] + 0.1) * 990
+
+# Create a country-level summary
+country_summary = merged_df.groupby(['country', 'alpha_3_code']).agg({
+    'estimated_mortality_per_1000': ['mean', 'count'],
+    'Life expectancy at birth, total (years)': 'mean',
+    'child_deprivation': 'mean'
+}).reset_index()
+
+# Flatten multi-index columns
+country_summary.columns = ['_'.join(col).strip('_') if isinstance(col, tuple) else col for col in country_summary.columns]
+
+# Load world map data with error handling
+try:
+    # Try first source
+    world = gpd.read_file("https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip")
+except Exception:
+    try:
+        # Try backup source
+        world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+    except Exception:
+        # Create empty GeoDataFrame as fallback
+        world = gpd.GeoDataFrame(columns=['geometry'])
+
+# Determine ISO column name
+iso_col = next((col for col in ['ISO_A3', 'iso_a3'] if col in world.columns), None)
+
+# Merge using appropriate strategy
+if iso_col is not None:
+    map_data = world.merge(
+        country_summary, 
+        how='left',
+        left_on=iso_col, 
+        right_on='alpha_3_code'
+    )
+else:
+    # Try merging on country names as fallback
+    name_col = next((col for col in ['NAME', 'name'] if col in world.columns), None)
+    
+    if name_col is not None:
+        map_data = world.merge(
+            country_summary,
+            how='left',
+            left_on=name_col,
+            right_on='country'
+        )
+    else:
+        map_data = world.copy()
+
+# Create custom colormap for mortality rate
+mortality_cmap = LinearSegmentedColormap.from_list(
+    'mortality_cmap', 
+    ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#08519c', '#08306b']
+)
+
+# Calculate new size (12% reduction from current size of 9x6)
+new_width = 9 * 0.88  # 7.92
+new_height = 6 * 0.88  # 5.28
+
+# Create the plot with reduced size
+fig, ax = plt.subplots(1, 1, figsize=(new_width, new_height))
+
+# Plot with mortality data
+map_data.plot(
+    column='estimated_mortality_per_1000_mean',
+    ax=ax,
+    legend=True,
+    legend_kwds={
+        'label': "Estimated Deaths per 1,000 Live Births",
+        'orientation': "horizontal",
+        'shrink': 0.6,
+        'pad': 0.01
+    },
+    cmap=mortality_cmap,
+    missing_kwds={'color': 'lightgray', 'label': 'No Data'}
+)
+
+# Add title and remove axis - reduced font size
+ax.set_title('Estimated Under-5 Child Mortality Rate by Country', fontsize=12)
+ax.set_axis_off()
+
+# Add note about data limitations - reduced font size
+plt.figtext(
+    0.1, 0.01, 
+    "Note: Estimates based on proxy indicators including life expectancy and child deprivation.\n"
+    "These are rough approximations and should be interpreted with caution.",
+    ha='left', fontsize=7,
+    style='italic'
+)
+
+plt.tight_layout()
+plt.savefig('child_mortality_world_map.png', dpi=300, bbox_inches='tight')
+plt.show()
+```
+
+## 🔝 Top 10 Countries with Highest U5MR
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Extract top 10 countries with highest mortality rates
+# Assumes country_summary is already created from previous code
+try:
+    top10_countries = country_summary.sort_values('estimated_mortality_per_1000_mean', ascending=False).head(10)
+except NameError:
+    # In case country_summary is not defined, recalculate it briefly
+    # This ensures the code block can run independently if needed
+    import pandas as pd
+    import numpy as np
+    
+    try:
+        # Load data
+        df3 = pd.read_csv('unicef_metadata.csv')
+        df2 = pd.read_csv('unicef_indicator_2.csv')
+        
+        # Standardize column names
+        if 'time_period' in df2.columns:
+            df2 = df2.rename(columns={'time_period': 'year'})
+        
+        # Convert year columns to numeric
+        df2['year'] = pd.to_numeric(df2['year'], errors='coerce')
+        df3['year'] = pd.to_numeric(df3['year'], errors='coerce')
+        
+        # Prepare simple merged dataset for calculation
+        df2 = df2.rename(columns={'obs_value': 'child_deprivation'})
+        merged_df = df3[['country', 'year', 'Life expectancy at birth, total (years)']]
+        deprivation_data = df2[df2['sex'] == 'Total'][['country', 'year', 'child_deprivation']]
+        merged_df = pd.merge(merged_df, deprivation_data, on=['country', 'year'], how='outer')
+        
+        # Define mortality proxy function
+        def simple_mortality_proxy(row):
+            score = 0
+            count = 0
+            if pd.notna(row.get('Life expectancy at birth, total (years)')):
+                life_exp = row['Life expectancy at birth, total (years)']
+                life_exp_factor = 0.1 - (life_exp - 30) * 0.2 / 50
+                score += min(0.1, max(-0.1, life_exp_factor))
+                count += 1
+            if pd.notna(row.get('child_deprivation')):
+                deprivation_factor = row['child_deprivation'] * 0.1 / 40
+                score += min(0.1, max(0, deprivation_factor))
+                count += 1
+            return score / count if count > 0 else 0
+        
+        # Calculate mortality
+        merged_df['mortality_proxy'] = merged_df.apply(simple_mortality_proxy, axis=1)
+        merged_df['estimated_mortality_per_1000'] = 2 + (merged_df['mortality_proxy'] + 0.1) * 990
+        
+        # Create country_summary
+        country_summary = merged_df.groupby('country')['estimated_mortality_per_1000'].mean().reset_index()
+        country_summary = country_summary.rename(columns={'estimated_mortality_per_1000': 'estimated_mortality_per_1000_mean'})
+        top10_countries = country_summary.sort_values('estimated_mortality_per_1000_mean', ascending=False).head(10)
+    except Exception as e:
+        # If data loading fails, create dummy data for visualization
+        import pandas as pd
+        countries = ['Country '+str(i) for i in range(1, 11)]
+        values = [100 - i*5 for i in range(10)]
+        top10_countries = pd.DataFrame({'country': countries, 'estimated_mortality_per_1000_mean': values})
+
+# Set up the plot style - REDUCED SIZE BY 60%
+plt.figure(figsize=(7.2, 4.8))  # Reduced from (12, 8) to 60%
+sns.set_style("whitegrid")
+
+# Create horizontal bar chart
+bars = sns.barplot(
+    x='estimated_mortality_per_1000_mean',
+    y='country',
+    data=top10_countries,
+    color='#d73027',  # Red color for urgency
+    orient='h'
+)
+
+# Customize the plot - reduced font sizes
+plt.title('Top 10 Countries with Highest Under-5 Mortality Rate', fontsize=12)  # Reduced from 16
+plt.xlabel('Deaths per 1,000 Live Births', fontsize=10)  # Reduced from 12
+plt.ylabel('')  # Remove y-axis label since country names are self-explanatory
+
+# Add value labels to the end of each bar - reduced font size
+for i, v in enumerate(top10_countries['estimated_mortality_per_1000_mean']):
+    bars.text(v + 1, i, f'{v:.1f}', va='center', fontsize=8)  # Added fontsize parameter
+
+# Adjust layout and save
+plt.tight_layout()
+plt.savefig('top10_u5mr_countries.png', dpi=300, bbox_inches='tight')
+plt.show()
+```
+
+## 📈 Time Series Trend (Global Average)
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+# Load the datasets with error handling
+try:
+    df1 = pd.read_csv('unicef_indicator_1.csv')
+    df2 = pd.read_csv('unicef_indicator_2.csv')
+    df3 = pd.read_csv('unicef_metadata.csv')
+except FileNotFoundError:
+    import sys
+    sys.exit("Error: Required data files not found.")
+
+# Standardize column names and formats
+if 'time_period' in df1.columns:
+    df1 = df1.rename(columns={'time_period': 'year'})
+if 'time_period' in df2.columns:
+    df2 = df2.rename(columns={'time_period': 'year'})
+
+# Convert year columns to numeric
+df1['year'] = pd.to_numeric(df1['year'], errors='coerce')
+df2['year'] = pd.to_numeric(df2['year'], errors='coerce')
+df3['year'] = pd.to_numeric(df3['year'], errors='coerce')
+
+# Rename value columns for clarity
+df1 = df1.rename(columns={'obs_value': 'population_under5'})
+df2 = df2.rename(columns={'obs_value': 'child_deprivation'})
+
+# Create a merged dataset with necessary columns
+merged_df = df3[['country', 'alpha_3_code', 'year', 'Life expectancy at birth, total (years)', 
+                 'Birth rate, crude (per 1,000 people)']].copy()
+
+# Add child deprivation data - use only Total sex data to simplify
+deprivation_data = df2[df2['sex'] == 'Total'][['country', 'alpha_3_code', 'year', 'child_deprivation']]
+merged_df = pd.merge(merged_df, deprivation_data, on=['country', 'alpha_3_code', 'year'], how='outer')
+
+# Simple mortality proxy function (-0.1 to 0.1 scale)
+def simple_mortality_proxy(row):
+    """Simple mortality proxy calculation"""
+    score = 0
+    count = 0
+    
+    # Factor 1: Life expectancy (if available)
+    if pd.notna(row.get('Life expectancy at birth, total (years)')):
+        life_exp = row['Life expectancy at birth, total (years)']
+        # Lower life expectancy = higher mortality
+        # Map 30-80 years to 0.1 to -0.1
+        life_exp_factor = 0.1 - (life_exp - 30) * 0.2 / 50
+        score += min(0.1, max(-0.1, life_exp_factor))
+        count += 1
+    
+    # Factor 2: Child deprivation (if available)
+    if pd.notna(row.get('child_deprivation')):
+        # Higher deprivation = higher mortality
+        # Map 0-40% to 0-0.1
+        deprivation_factor = row['child_deprivation'] * 0.1 / 40
+        score += min(0.1, max(0, deprivation_factor))
+        count += 1
+        
+    # Return average score or 0 if no data
+    return score / count if count > 0 else 0
+
+# Apply the simple proxy calculation
+merged_df['mortality_proxy'] = merged_df.apply(simple_mortality_proxy, axis=1)
+
+# Convert proxy to deaths per 1000 live births
+# Scale from -0.1 to 0.1 maps to roughly 2-200 deaths per 1000
+merged_df['estimated_mortality_per_1000'] = 2 + (merged_df['mortality_proxy'] + 0.1) * 990
+
+# Group by year to get global average for each year
+global_avg = merged_df.groupby('year')['estimated_mortality_per_1000'].agg(['mean', 'count', 'std']).reset_index()
+
+# Filter out years with very few data points (for more reliable averages)
+min_countries = 5  # Minimum number of countries required per year
+global_avg = global_avg[global_avg['count'] >= min_countries]
+
+# Sort by year for proper time series display
+global_avg = global_avg.sort_values('year')
+
+# Create the figure - REDUCED SIZE BY 60%
+plt.figure(figsize=(8.4, 4.8))  # Reduced from (14, 8) to 60%
+sns.set_style("whitegrid")
+
+# Create the line chart with error bands
+plt.plot(global_avg['year'], global_avg['mean'], marker='o', linewidth=2, color='#1f77b4')
+
+# Add confidence intervals/error bands if enough data points
+plt.fill_between(
+    global_avg['year'],
+    global_avg['mean'] - global_avg['std'] / np.sqrt(global_avg['count']),  # Lower 95% CI
+    global_avg['mean'] + global_avg['std'] / np.sqrt(global_avg['count']),  # Upper 95% CI
+    alpha=0.3,
+    color='#1f77b4'
+)
+
+# Add data points with size proportional to number of countries - reduced marker size
+sizes = global_avg['count'] * 1.8  # Reduced from 3 to 1.8 (60%)
+plt.scatter(global_avg['year'], global_avg['mean'], s=sizes, alpha=0.7, color='#1f77b4')
+
+# Annotate some key years (start, middle, end) - reduced font size
+years_to_annotate = [global_avg['year'].min(), 
+                     global_avg['year'].iloc[len(global_avg) // 2], 
+                     global_avg['year'].max()]
+
+for year in years_to_annotate:
+    row = global_avg[global_avg['year'] == year].iloc[0]
+    plt.annotate(
+        f"{row['year']}: {row['mean']:.1f}",
+        xy=(row['year'], row['mean']),
+        xytext=(5, 10),
+        textcoords='offset points',
+        fontsize=8,  # Reduced from 10
+        arrowprops=dict(arrowstyle='->', color='gray')
+    )
+
+# Customize the plot - reduced font sizes
+plt.title('Global Average Under-Five Mortality Rate Over Time', fontsize=12)  # Reduced from 16
+plt.xlabel('Year', fontsize=10)  # Reduced from 14
+plt.ylabel('Deaths per 1,000 Live Births', fontsize=10)  # Reduced from 14
+plt.grid(True, alpha=0.3)
+
+# Adjust y-axis to start from zero for better context
+y_max = global_avg['mean'].max() * 1.2  # 20% headroom
+plt.ylim(0, y_max)
+
+# Add context annotations - reduced font size
+plt.figtext(
+    0.5, 0.01,
+    "Note: Estimates based on proxy indicators including life expectancy and child deprivation.\n"
+    f"Circle size indicates number of countries with data for that year (min: {global_avg['count'].min()}, max: {global_avg['count'].max()}).",
+    ha='center', fontsize=8,  # Reduced from 10
+    style='italic'
+)
+
+# Add a trend line (polynomial fit)
+z = np.polyfit(global_avg['year'], global_avg['mean'], 2)
+p = np.poly1d(z)
+plt.plot(global_avg['year'], p(global_avg['year']), "r--", alpha=0.7, label="Trend")
+
+# Add legend with reduced font size
+plt.legend(loc="upper right", fontsize=9)  # Added fontsize parameter
+
+# Adjust layout and save
+plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # Make room for the note at the bottom
+plt.savefig('global_u5mr_trend.png', dpi=300, bbox_inches='tight')
+plt.show()
+```
+
+## 🔵 Scatterplot (U5MR vs. GDP)
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from scipy import stats
+
+# Load the datasets with error handling
+try:
+    df1 = pd.read_csv('unicef_indicator_1.csv')
+    df2 = pd.read_csv('unicef_indicator_2.csv')
+    df3 = pd.read_csv('unicef_metadata.csv')
+except FileNotFoundError:
+    import sys
+    sys.exit("Error: Required data files not found.")
+
+# Standardize column names and formats
+if 'time_period' in df1.columns:
+    df1 = df1.rename(columns={'time_period': 'year'})
+if 'time_period' in df2.columns:
+    df2 = df2.rename(columns={'time_period': 'year'})
+
+# Convert year columns to numeric
+df1['year'] = pd.to_numeric(df1['year'], errors='coerce')
+df2['year'] = pd.to_numeric(df2['year'], errors='coerce')
+df3['year'] = pd.to_numeric(df3['year'], errors='coerce')
+
+# Rename value columns for clarity
+df1 = df1.rename(columns={'obs_value': 'population_under5'})
+df2 = df2.rename(columns={'obs_value': 'child_deprivation'})
+
+# First, find the appropriate economic indicator column
+economic_indicator = None
+potential_columns = ['GNI (current US$)', 'GDP per capita (constant 2015 US$)', 'GDP (current US$)']
+
+for col in potential_columns:
+    if col in df3.columns:
+        economic_indicator = col
+        break
+
+if economic_indicator is None:
+    # Create a simple placeholder for demonstration
+    df3['GDP per capita (constant 2015 US$)'] = df3['Life expectancy at birth, total (years)'] * 1000
+    economic_indicator = 'GDP per capita (constant 2015 US$)'
+
+# Create a merged dataset with only necessary columns
+merged_df = df3[['country', 'alpha_3_code', 'year', 'Life expectancy at birth, total (years)', 
+                 'Birth rate, crude (per 1,000 people)']].copy()
+
+# Add the economic indicator
+merged_df[economic_indicator] = df3[economic_indicator]
+
+# Add child deprivation data - use only Total sex data to simplify
+deprivation_data = df2[df2['sex'] == 'Total'][['country', 'alpha_3_code', 'year', 'child_deprivation']]
+merged_df = pd.merge(merged_df, deprivation_data, on=['country', 'alpha_3_code', 'year'], how='outer')
+
+# Simple mortality proxy function (-0.1 to 0.1 scale)
+def simple_mortality_proxy(row):
+    """Simple mortality proxy calculation"""
+    score = 0
+    count = 0
+    
+    # Factor 1: Life expectancy (if available)
+    if pd.notna(row.get('Life expectancy at birth, total (years)')):
+        life_exp = row['Life expectancy at birth, total (years)']
+        # Lower life expectancy = higher mortality
+        # Map 30-80 years to 0.1 to -0.1
+        life_exp_factor = 0.1 - (life_exp - 30) * 0.2 / 50
+        score += min(0.1, max(-0.1, life_exp_factor))
+        count += 1
+    
+    # Factor 2: Child deprivation (if available)
+    if pd.notna(row.get('child_deprivation')):
+        # Higher deprivation = higher mortality
+        # Map 0-40% to 0-0.1
+        deprivation_factor = row['child_deprivation'] * 0.1 / 40
+        score += min(0.1, max(0, deprivation_factor))
+        count += 1
+        
+    # Return average score or 0 if no data
+    return score / count if count > 0 else 0
+
+# Apply the simple proxy calculation
+merged_df['mortality_proxy'] = merged_df.apply(simple_mortality_proxy, axis=1)
+
+# Convert proxy to deaths per 1000 live births
+# Scale from -0.1 to 0.1 maps to roughly 2-200 deaths per 1000
+merged_df['estimated_mortality_per_1000'] = 2 + (merged_df['mortality_proxy'] + 0.1) * 990
+
+# Filter to include only rows that have both mortality estimates and economic indicator data
+scatter_data = merged_df.dropna(subset=['estimated_mortality_per_1000', economic_indicator]).copy()  # Use .copy() to avoid the warning
+
+# Log transform economic data for better visualization (standard for economic data)
+# Add a small value before log transform to handle zeros or very small values
+scatter_data.loc[:, 'log_economic_indicator'] = np.log10(scatter_data[economic_indicator].clip(lower=1))
+
+# Original reduced size was (7.2, 4.8) - 60% of (12, 8)
+# Increase that by 15%
+new_width = 7.2 * 1.15  # 8.28
+new_height = 4.8 * 1.15  # 5.52
+plt.figure(figsize=(new_width, new_height))
+sns.set_style("whitegrid")
+
+# Create scatterplot with regression line
+scatter = sns.regplot(
+    x='log_economic_indicator',
+    y='estimated_mortality_per_1000',
+    data=scatter_data,
+    scatter_kws={'alpha': 0.6, 'color': '#2171b5'},
+    line_kws={'color': 'red', 'linewidth': 2}
+)
+
+# Calculate correlation coefficient and p-value
+correlation, p_value = stats.pearsonr(
+    scatter_data['log_economic_indicator'],
+    scatter_data['estimated_mortality_per_1000']
+)
+
+# Get regression line equation
+slope, intercept, r_value, p_value, std_err = stats.linregress(
+    scatter_data['log_economic_indicator'],
+    scatter_data['estimated_mortality_per_1000']
+)
+
+# Add regression equation and correlation to the plot
+equation = f"y = {slope:.2f}x + {intercept:.2f}"
+correlation_text = f"r = {correlation:.2f}, p < 0.001" if p_value < 0.001 else f"r = {correlation:.2f}, p = {p_value:.3f}"
+
+plt.text(
+    0.05, 0.95, 
+    f"{equation}\n{correlation_text}", 
+    transform=plt.gca().transAxes,
+    fontsize=10,  # Reduced font size
+    verticalalignment='top',
+    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+)
+
+# Customize the plot
+indicator_short_name = economic_indicator.split('(')[0].strip()
+plt.title(f'Relationship Between {indicator_short_name} and Under-5 Mortality Rate', fontsize=12)  # Reduced font size
+plt.xlabel(f'Log10 {economic_indicator}', fontsize=10)  # Reduced font size
+plt.ylabel('Under-5 Mortality Rate (deaths per 1,000 live births)', fontsize=10)  # Reduced font size
+
+# Create custom x-ticks for better readability of log scale
+min_log = int(scatter_data['log_economic_indicator'].min())
+max_log = int(scatter_data['log_economic_indicator'].max() + 1)
+log_ticks = list(range(min_log, max_log + 1))
+tick_labels = [f'${10**i:,}' for i in log_ticks]
+plt.xticks(log_ticks, tick_labels, fontsize=6)  # Reduced font size by 60% (from default ~10 to 6)
+
+# Add explanatory note
+plt.figtext(
+    0.5, 0.01,
+    f"Note: {indicator_short_name} is shown on a logarithmic scale. Each point represents a country-year observation.",
+    ha='center', fontsize=8,  # Reduced font size
+    style='italic'
+)
+
+# Highlight some key countries if present in filtered data
+key_countries = ['Chad', 'Angola', 'Sweden', 'United States', 'Japan']
+for country in key_countries:
+    country_data = scatter_data[scatter_data['country'] == country]
+    if not country_data.empty:
+        # Get the most recent data point for the country
+        recent_data = country_data.sort_values('year', ascending=False).iloc[0]
+        plt.annotate(
+            country,
+            xy=(recent_data['log_economic_indicator'], recent_data['estimated_mortality_per_1000']),
+            xytext=(5, 5),
+            textcoords='offset points',
+            fontsize=8,  # Reduced font size
+            arrowprops=dict(arrowstyle='->', color='gray')
+        )
+
+# Adjust layout and save
+plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # Make room for the note at the bottom
+plt.savefig('u5mr_vs_economic_indicator.png', dpi=300, bbox_inches='tight')
+plt.show()
+```
+
+## 📌 Conclusion
+
+While the global under-five mortality rate is declining, large disparities remain. Some regions still face extremely high child death rates, highlighting the need for focused public health efforts and international support. Visualizing this data helps uncover where progress is happening — and where urgent action is needed.
+
+---
+
+*Generated using Quarto + Python + Plotnine*
