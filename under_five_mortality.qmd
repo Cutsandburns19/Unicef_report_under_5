@@ -99,6 +99,8 @@ merged_df.to_csv('simple_mortality_estimates.csv', index=False)
 country_summary.to_csv('simple_country_mortality_summary.csv', index=False)
 ```
 
+
+
 ## 🌍 Latest Mortality Rate by Country (Map)
 ```{python}
 import pandas as pd
@@ -263,6 +265,7 @@ plt.tight_layout()
 plt.savefig('child_mortality_world_map.png', dpi=300, bbox_inches='tight')
 plt.show()
 ```
+The map reveals a clear geographic pattern in under-five mortality rates, with sub-Saharan African countries bearing the highest burden. Countries colored in darker red experience mortality rates exceeding 100 deaths per 1,000 live births, while regions in lighter colors have made significant progress in reducing child deaths.
 
 ## 🔝 Top 10 Countries with Highest U5MR
 
@@ -357,6 +360,7 @@ plt.tight_layout()
 plt.savefig('top10_u5mr_countries.png', dpi=300, bbox_inches='tight')
 plt.show()
 ```
+The bar chart highlights that the highest under-five mortality rates are concentrated in African nations, where children face mortality risks up to 20 times higher than in developed regions. South Sudan shows the highest rate at approximately 125 deaths per 1,000 live births, followed closely by Mali, Chad, and Sierra Leone—all exceeding 110 deaths per 1,000 live births.
 
 ## 📈 Time Series Trend (Global Average)
 
@@ -510,6 +514,7 @@ plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # Make room for the note at the botto
 plt.savefig('global_u5mr_trend.png', dpi=300, bbox_inches='tight')
 plt.show()
 ```
+The time series reveals an encouraging downward trend in global under-five mortality rates over time. The data shows that average mortality has declined from approximately 80 deaths per 1,000 live births in earlier years to below 50 in recent years, representing a significant global health improvement. The red dashed trend line confirms this consistent decline, though the confidence intervals (shaded area) indicate considerable variation between countries.
 
 ## 🔵 Scatterplot (U5MR vs. GDP)
 
@@ -746,6 +751,7 @@ plt.tight_layout(rect=[0, 0.05, 1, 0.97])  # Make room for the note at the botto
 plt.savefig('u5mr_vs_gni_corrected.png', dpi=300, bbox_inches='tight')
 plt.show()
 ```
+The scatterplot demonstrates the strong inverse relationship between national income (GNI) and under-five mortality rates. Countries with lower GNI per capita consistently show higher child mortality rates, with a correlation coefficient of approximately -0.8. South Sudan stands out with both the lowest income and highest mortality rate (125 deaths per 1,000 live births), while high-income countries cluster at the bottom right with rates below 10 deaths per 1,000 live births.
 
 ## 📌 Conclusion
 
